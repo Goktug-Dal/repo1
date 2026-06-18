@@ -9,7 +9,50 @@ spec:
       script: |
         #!/bin/sh
         echo "Cleaning up previous resources..."
+        oc delete builds --selector=app=myapp --ignore-not-found
+        oc delete pods --selector=app=myapp --ignore-not-found
         echo "Cleanup complete!"
+
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: git-clone
+spec:
+  params:
+    - name: source-repo
+      type: string
+    - name: source-branch
+      type: string
+  steps:
+    - name: clone-repo
+      image: alpine/git
+      script: |
+        #!/bin/sh
+        echo "Cloning repository..."
+        git clone $(params.source-repo) /workspace/source
+        cd /workspace/source
+        git checkout $(params.source-branch)
+        echo "Clone completed!"
+
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: flake8-test
+spec:
+  steps:
+    - name: run-flake8
+      image: python:3.9-slim
+      workingDir: /workspace/source
+      script: |
+        #!/bin/bash
+        echo "Installing flake8..."
+        pip install flake8
+        echo "Running flake8 linting..."
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        echo "Linting completed!"
 
 ---
 apiVersion: tekton.dev/v1beta1
@@ -17,16 +60,53 @@ kind: Task
 metadata:
   name: nose-test
 spec:
+  params:
+    - name: source-repo
+      type: string
+    - name: source-branch
+      type: string
   steps:
     - name: run-nose-tests
       image: python:3.9-slim
+      workingDir: /workspace/source
       script: |
         #!/bin/bash
         echo "Installing dependencies..."
         pip install nose coverage
         echo "Running nose tests..."
-        nosetests --with-coverage --cover-package=src
+        nosetests --with-coverage --cover-package=src tests/
         echo "Tests completed!"
+
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: buildah
+spec:
+  steps:
+    - name: build-image
+      image: quay.io/buildah/stable
+      script: |
+        #!/bin/sh
+        echo "Building container image..."
+        buildah bud -t myapp:latest /workspace/source
+        echo "Image built successfully!"
+
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: openshift-client-deploy
+spec:
+  steps:
+    - name: deploy-to-openshift
+      image: image-registry.openshift-image-registry.svc:5000/openshift/cli
+      script: |
+        #!/bin/sh
+        echo "Deploying to OpenShift..."
+        oc apply -f /workspace/source/deploy.yml
+        oc rollout status deployment/myapp
+        echo "Deployment complete!"
 
 ---
 apiVersion: tekton.dev/v1beta1
@@ -40,8 +120,53 @@ spec:
     - name: cleanup
       taskRef:
         name: cleanup
+    - name: git-clone
+      taskRef:
+        name: git-clone
+      params:
+        - name: source-repo
+          value: $(params.source-repo)
+        - name: source-branch
+          value: $(params.source-branch)
+      workspaces:
+        - name: source
+          workspace: source
+      runAfter:
+        - cleanup
+    - name: flake8-test
+      taskRef:
+        name: flake8-test
+      workspaces:
+        - name: source
+          workspace: source
+      runAfter:
+        - git-clone
     - name: nose-test
       taskRef:
         name: nose-test
+      params:
+        - name: source-repo
+          value: $(params.source-repo)
+        - name: source-branch
+          value: $(params.source-branch)
+      workspaces:
+        - name: source
+          workspace: source
       runAfter:
-        - cleanup
+        - flake8-test
+    - name: buildah
+      taskRef:
+        name: buildah
+      workspaces:
+        - name: source
+          workspace: source
+      runAfter:
+        - nose-test
+    - name: openshift-client-deploy
+      taskRef:
+        name: openshift-client-deploy
+      workspaces:
+        - name: source
+          workspace: source
+      runAfter:
+        - buildah
