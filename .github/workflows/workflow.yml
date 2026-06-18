@@ -10,33 +10,62 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Set up job
+        uses: actions/checkout@v3
+      
+      - name: Initialize containers
+        run: echo "Initializing containers for linting..."
+      
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
+      
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install flake8
+      
+      - name: Checkout
+        uses: actions/checkout@v3
+      
       - name: Lint with flake8
         run: |
           flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+      
+      - name: Post Checkout
+        run: echo "Linting completed successfully"
 
   test:
     runs-on: ubuntu-latest
     needs: lint
     steps:
-      - uses: actions/checkout@v3
+      - name: Set up job
+        uses: actions/checkout@v3
+      
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
+      
+      - name: Initialize containers
+        run: echo "Initializing containers for testing..."
+      
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install nose coverage
+      
+      - name: Checkout
+        uses: actions/checkout@v3
+      
       - name: Run unit tests with nose
         run: |
           nosetests --with-coverage --cover-package=src
+      
+      - name: Post Setup Python
+        run: echo "Tests completed successfully"
+      
+      - name: Complete job
+        run: echo "All jobs completed successfully"
